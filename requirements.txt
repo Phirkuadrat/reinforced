@@ -6,3 +6,7 @@ numpy
 torch
 networkx
 scikit-learn
+fastapi
+uvicorn
+pydantic
+sentence-transformers

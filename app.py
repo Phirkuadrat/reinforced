@@ -75,11 +75,20 @@ if st.session_state.page == "home":
     # ? Sidebar
     with st.sidebar:
         name = st.selectbox("🧑🏻‍💼 Cari Nama Peneliti", list_nama_peneliti, placeholder="Ketik atau Pilih")
+        
+        use_cascading_ui = st.radio(
+            "⚙️ Metode Rekomendasi",
+            ["Standar (H-Index & Graf)", "Cascading Hybrid (Prioritas Topik S-BERT)"],
+            index=1 if st.session_state.get("use_cascading", False) else 0
+        )
+        use_cascading = (use_cascading_ui == "Cascading Hybrid (Prioritas Topik S-BERT)")
+
         if st.button("🔍 Temukan Rekomendasi"):
             if name:
                 try:
                     st.session_state.selected_name = name
-                    st.session_state.recommendation_result = recommender(name)
+                    st.session_state.use_cascading = use_cascading
+                    st.session_state.recommendation_result = recommender(name, use_cascading=use_cascading)
                     st.session_state.page = "recommendation"
                     st.rerun()
                 except Exception as e:
@@ -143,11 +152,20 @@ elif st.session_state.page == "daftar_peneliti":
     # ? Sidebar
     with st.sidebar:
         name = st.selectbox("🧑🏻‍💼 Cari Nama Peneliti", list_nama_peneliti, placeholder="Ketik atau Pilih")
+        
+        use_cascading_ui = st.radio(
+            "⚙️ Metode Rekomendasi",
+            ["Standar (H-Index & Graf)", "Cascading Hybrid (Prioritas Topik S-BERT)"],
+            index=1 if st.session_state.get("use_cascading", False) else 0
+        )
+        use_cascading = (use_cascading_ui == "Cascading Hybrid (Prioritas Topik S-BERT)")
+
         if st.button("🔍 Temukan Rekomendasi"):
             if name:
                 try:
                     st.session_state.selected_name = name
-                    st.session_state.recommendation_result = recommender(name)
+                    st.session_state.use_cascading = use_cascading
+                    st.session_state.recommendation_result = recommender(name, use_cascading=use_cascading)
                     st.session_state.page = "recommendation"
                     st.rerun()
                 except Exception as e:
@@ -179,11 +197,20 @@ elif st.session_state.page == "recommendation":
     # Sidebar
     with st.sidebar:
         name = st.selectbox("🧑🏻‍💼 Cari Nama Peneliti", list_nama_peneliti, placeholder="Ketik atau Pilih")
+        
+        use_cascading_ui = st.radio(
+            "⚙️ Metode Rekomendasi",
+            ["Standar (H-Index & Graf)", "Cascading Hybrid (Prioritas Topik S-BERT)"],
+            index=1 if st.session_state.get("use_cascading", False) else 0
+        )
+        use_cascading = (use_cascading_ui == "Cascading Hybrid (Prioritas Topik S-BERT)")
+
         if st.button("🔍 Temukan Rekomendasi"):
             if name:
                 try:
                     st.session_state.selected_name = name
-                    st.session_state.recommendation_result = recommender(name)
+                    st.session_state.use_cascading = use_cascading
+                    st.session_state.recommendation_result = recommender(name, use_cascading=use_cascading)
                     st.rerun()
                 except Exception as e:
                     st.error(f"Gagal menjalankan rekomendasi: {e}")
