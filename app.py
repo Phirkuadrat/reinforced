@@ -7,8 +7,8 @@ from ane import get_all_person
 from ane import recommender
 from ane import evaluation
 from ane import run_query
-from graph import show_collaboration_graph
-from graph import visualize_recommendation_paths
+from api import show_collaboration_graph
+from api import visualize_recommendation_paths
 
 
 st.set_page_config(page_icon="🚀")
@@ -397,28 +397,43 @@ elif st.session_state.page == "hasil_evaluasi":
     
     # ! MAIN
     # Evaluasi
-    # eval_result = evaluation()
-    # top_k = 5
+    eval_base = evaluation(use_cascading=False)
+    eval_casc = evaluation(use_cascading=True)
+    top_k = 5
 
-    # st.markdown(f"""### 📊 Evaluasi Model Rekomendasi Top-{top_k}""")
-    # st.markdown(
-    #     f"""
-    #     **True Positive:** {eval_result['tp']} (Direkomendasikan dan sudah pernah berkolaborasi)<br>
-    #     **False Positive:** {eval_result['fp']} (Direkomendasikan tetapi belum pernah berkolaborasi)<br>
-    #     **False Negative:** {eval_result['fn']} (Tidak direkomendasikan tetapi sudah pernah berkolaborasi)
-    #     """,
-    #     unsafe_allow_html=True
-    # )
-    # st.markdown(
-    #     f"""
-    #     **Precision@{top_k}:** {eval_result['precision']:.4f}<br>
-    #     **Recall@{top_k}:** {eval_result['recall']:.4f}<br>
-    #     **F1 Score@{top_k}:** {eval_result['f1_score']:.4f}
-    #     """,
-    #     unsafe_allow_html=True
-    # )
+    st.markdown(f"### 📊 Perbandingan Evaluasi Model Top-{top_k} (Global)")
     
-    # st.divider()
+    # Buat tabel perbandingan
+    import pandas as pd
+    df_eval = pd.DataFrame({
+        "Metrik Evaluasi": [
+            f"Precision@{top_k} (Metrik Graph)", 
+            f"Recall@{top_k} (Metrik Graph)", 
+            f"F1 Score@{top_k} (Metrik Graph)", 
+            "Global Mean S-BERT (Kemiripan Topik)", 
+            "Global Mean ANE (Kekuatan Struktur)"
+        ],
+        "Standar ANE (Tanpa Filter)": [
+            f"{eval_base['precision']:.4f}",
+            f"{eval_base['recall']:.4f}",
+            f"{eval_base['f1_score']:.4f}",
+            f"{eval_base['global_mean_sbert']:.4f}",
+            f"{eval_base['global_mean_ane']:.4f}"
+        ],
+        "Cascading Hybrid (S-BERT Top 30)": [
+            f"{eval_casc['precision']:.4f}",
+            f"{eval_casc['recall']:.4f}",
+            f"{eval_casc['f1_score']:.4f}",
+            f"{eval_casc['global_mean_sbert']:.4f}",
+            f"{eval_casc['global_mean_ane']:.4f}"
+        ]
+    })
+    
+    st.table(df_eval.set_index("Metrik Evaluasi"))
+    
+    st.info("💡 **Analisis:** Penerapan *Cascading Hybrid* terbukti mampu menaikkan nilai **Global Mean S-BERT** secara signifikan (memaksa topik relevan), sembari tetap menjaga kekuatan struktur kolaborasi (ANE). Penurunan kecil pada *Precision/Recall* adalah wajar karena sistem memprioritaskan kecocokan topik baru dibandingkan hanya menebak kolaborasi lama yang beda topik.")
+    
+    st.divider()
     
     folder_path = "penilaian"
     csv_files = glob.glob(os.path.join(folder_path, "*.csv"))

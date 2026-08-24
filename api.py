@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from ane import recommender, df_all_recommendation_base, run_query
 import uvicorn
+import pandas as pd
+from collections import defaultdict
 
 app = FastAPI(title="REINFORCED Recommendation API")
 
@@ -14,6 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# API untuk mengambil daftar seluruh dosen (beserta SINTA ID)
 @app.get("/api/dosen")
 def get_dosen_list():
     if df_all_recommendation_base is None:
@@ -33,6 +36,23 @@ def get_dosen_list():
             
     dosen_list.sort(key=lambda x: x["nama"])
     return {"status": "success", "data": dosen_list}
+
+# API untuk mengambil daftar publikasi dari satu dosen berdasarkan SINTA ID
+@app.get("/api/publikasi")
+def get_publikasi(sinta_id: str):
+    query = f"""
+    MATCH (p:ns0__Person {{ns0__hasSintaID: '{sinta_id}'}})-[:ns0__hasPublication]->(pub:ns0__Publication)
+    RETURN pub.ns0__hasTitle AS judul
+    """
+    try:
+        df_pub = run_query(query)
+        if df_pub.empty:
+            return {"status": "success", "sinta_id": sinta_id, "data": []}
+        
+        pubs = df_pub['judul'].tolist()
+        return {"status": "success", "sinta_id": sinta_id, "data": pubs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/rekomendasi")
 def get_recommendation(name: str, use_cascading: bool = True):
@@ -89,130 +109,310 @@ def get_recommendation(name: str, use_cascading: bool = True):
                 r['Detail_Statistik'] = detail_dict[rsid]['statistik']
                 r['Detail_Publikasi'] = detail_dict[rsid]['publikasi']
                 
-        return {"status": "success", "data": result_list}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/graph")
-def get_graph_data(target_name: str, rekom_names: str):
-    try:
-        names_list = [name.strip() for name in rekom_names.split(',') if name.strip()]
-        if not names_list:
-            return {"status": "success", "data": {"nodes": [], "edges": []}}
-            
-        # Bangun query UNION dari semua rekomendasi
-        query_blocks = []
-        for nama_rekom in names_list:
-            block = f"""
-            MATCH path = shortestPath(
-                (p1:ns0__Person {{ns0__hasName: '{target_name}'}})-[:collaborateWith*1..10]-
-                (p2:ns0__Person {{ns0__hasName: '{nama_rekom}'}})
-            )
-            RETURN nodes(path) AS nodes, relationships(path) AS rels
-            """
-            query_blocks.append(block)
-
-        full_query = "\nUNION\n".join(query_blocks)
-        result = run_query(full_query)
+        # ---------------------------------------------------------
+        # GENERATE GRAPH DATA
+        # ---------------------------------------------------------
+        target_name_graph = name
+        names_list = [r['Rekomendasi_Nama'] for r in result_list]
         
         nodes_dict = {}
         edges_list = []
-        added_edges = set()
         
-        if result.empty:
-            # Fallback query: jika tidak ada path collaborateWith
-            rekom_in_query = "[" + ", ".join([f"'{s}'" for s in set(names_list)]) + "]"
-            fallback_query = f"""
-            MATCH (target:ns0__Person {{ns0__hasName: '{target_name}'}})
-            WITH target
-            MATCH (rekom:ns0__Person)
-            WHERE rekom.ns0__hasName IN {rekom_in_query}
-            RETURN collect(DISTINCT target) AS target_nodes, collect(DISTINCT rekom) AS rekom_nodes
-            """
-            result = run_query(fallback_query)
-            if not result.empty:
-                target_nodes = result.iloc[0]["target_nodes"] if isinstance(result.iloc[0]["target_nodes"], list) else []
-                rekom_nodes = result.iloc[0]["rekom_nodes"] if isinstance(result.iloc[0]["rekom_nodes"], list) else []
-                
-                t_id = ""
-                # Extract Target
-                if target_nodes and len(target_nodes) > 0:
-                    t_node = target_nodes[0]
-                    t_id = str(t_node.get("ns0__hasSintaID", target_name))
-                    nodes_dict[t_id] = {
-                        "id": t_id,
-                        "label": t_node.get("ns0__hasName", target_name),
-                        "group": "target"
-                    }
+        if names_list:
+            query_blocks = []
+            for nama_rekom in names_list:
+                block = f"""
+                MATCH path = shortestPath(
+                    (p1:ns0__Person {{ns0__hasName: '{target_name_graph}'}})-[:collaborateWith*1..10]-
+                    (p2:ns0__Person {{ns0__hasName: '{nama_rekom}'}})
+                )
+                RETURN nodes(path) AS nodes, relationships(path) AS rels
+                """
+                query_blocks.append(block)
+
+            full_query = "\nUNION\n".join(query_blocks)
+            result = run_query(full_query)
+            
+            added_edges = set()
+            
+            if result.empty:
+                # Fallback query
+                rekom_in_query = "[" + ", ".join([f"'{s}'" for s in set(names_list)]) + "]"
+                fallback_query = f"""
+                MATCH (target:ns0__Person {{ns0__hasName: '{target_name_graph}'}})
+                WITH target
+                MATCH (rekom:ns0__Person)
+                WHERE rekom.ns0__hasName IN {rekom_in_query}
+                RETURN collect(DISTINCT target) AS target_nodes, collect(DISTINCT rekom) AS rekom_nodes
+                """
+                result = run_query(fallback_query)
+                if not result.empty:
+                    target_nodes = result.iloc[0]["target_nodes"] if isinstance(result.iloc[0]["target_nodes"], list) else []
+                    rekom_nodes = result.iloc[0]["rekom_nodes"] if isinstance(result.iloc[0]["rekom_nodes"], list) else []
                     
-                # Extract Rekom
-                for r_node in rekom_nodes:
-                    r_id = str(r_node.get("ns0__hasSintaID", r_node.get("ns0__hasName", "")))
-                    r_name = r_node.get("ns0__hasName", "")
-                    nodes_dict[r_id] = {
-                        "id": r_id,
-                        "label": r_name,
-                        "group": "recommendation"
-                    }
-                    if t_id:
-                        edges_list.append({
-                            "from": t_id,
-                            "to": r_id,
-                            "label": "recommended"
-                        })
-        else:
-            for idx, row in result.iterrows():
-                path_nodes = row["nodes"]
-                path_rels = row["rels"]
-                
-                # Tambahkan node
-                if isinstance(path_nodes, list):
-                    for node in path_nodes:
-                        name = node.get("ns0__hasName", "Unknown")
-                        node_id = str(node.get("ns0__hasSintaID", name))
+                    t_id = ""
+                    if target_nodes and len(target_nodes) > 0:
+                        t_node = target_nodes[0]
+                        t_id = str(t_node.get("ns0__hasSintaID", target_name_graph))
+                        nodes_dict[t_id] = {
+                            "id": t_id,
+                            "label": t_node.get("ns0__hasName", target_name_graph),
+                            "group": "target"
+                        }
                         
-                        group = "intermediate"
-                        if name == target_name:
-                            group = "target"
-                        elif name in names_list:
-                            group = "recommendation"
+                    for r_node in rekom_nodes:
+                        r_id = str(r_node.get("ns0__hasSintaID", r_node.get("ns0__hasName", "")))
+                        r_name = r_node.get("ns0__hasName", "")
+                        nodes_dict[r_id] = {
+                            "id": r_id,
+                            "label": r_name,
+                            "group": "recommendation"
+                        }
+                        if t_id:
+                            edges_list.append({
+                                "from": t_id,
+                                "to": r_id,
+                                "label": "recommended"
+                            })
+            else:
+                for idx, row in result.iterrows():
+                    path_nodes = row["nodes"]
+                    path_rels = row["rels"]
+                    
+                    if isinstance(path_nodes, list):
+                        for node in path_nodes:
+                            n_name = node.get("ns0__hasName", "Unknown")
+                            node_id = str(node.get("ns0__hasSintaID", n_name))
                             
-                        if node_id not in nodes_dict:
-                            nodes_dict[node_id] = {
-                                "id": node_id,
-                                "label": name,
-                                "group": group
-                            }
-                            
-                # Tambahkan edge (relationship)
-                if isinstance(path_rels, list):
-                    for rel in path_rels:
-                        # Di neo4j driver, rel adalah Tuple (Node, Type, Node)
-                        if isinstance(rel, tuple) and len(rel) == 3:
-                            source_node, rel_type, target_node = rel
-                            s_id = str(source_node.get("ns0__hasSintaID", source_node.get("ns0__hasName", "")))
-                            t_id = str(target_node.get("ns0__hasSintaID", target_node.get("ns0__hasName", "")))
-                            
-                            edge_key = f"{s_id}-{t_id}-{rel_type}"
-                            if edge_key not in added_edges:
-                                edges_list.append({
-                                    "from": s_id,
-                                    "to": t_id,
-                                    "label": rel_type
-                                })
-                                added_edges.add(edge_key)
+                            group = "intermediate"
+                            if n_name.lower() == target_name_graph.lower():
+                                group = "target"
+                            elif n_name in names_list:
+                                group = "recommendation"
+                                
+                            if node_id not in nodes_dict:
+                                nodes_dict[node_id] = {
+                                    "id": node_id,
+                                    "label": n_name,
+                                    "group": group
+                                }
+                                
+                    if isinstance(path_rels, list):
+                        for rel in path_rels:
+                            if isinstance(rel, tuple) and len(rel) == 3:
+                                source_node, rel_type, target_node = rel
+                                s_id = str(source_node.get("ns0__hasSintaID", source_node.get("ns0__hasName", "")))
+                                t_id = str(target_node.get("ns0__hasSintaID", target_node.get("ns0__hasName", "")))
+                                
+                                edge_key = f"{s_id}-{t_id}-{rel_type}"
+                                if edge_key not in added_edges:
+                                    edges_list.append({
+                                        "from": s_id,
+                                        "to": t_id,
+                                        "label": rel_type
+                                    })
+                                    added_edges.add(edge_key)
 
         return {
-            "status": "success",
-            "data": {
+            "status": "success", 
+            "data": result_list,
+            "graph": {
                 "nodes": list(nodes_dict.values()),
                 "edges": edges_list
             }
         }
+
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
 if __name__ == "__main__":
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+
+
+# ==========================================
+# FUNGSI GRAF UNTUK STREAMLIT (EX-GRAPH.PY)
+# ==========================================
+import streamlit.components.v1 as components
+from pyvis.network import Network
+import streamlit as st
+
+# API/Fungsi untuk memvisualisasikan seluruh graf kolaborasi (digunakan oleh antarmuka Streamlit)
+def show_collaboration_graph():
+    try:
+        query = """
+        MATCH (p1:ns0__Person)-[:collaborateWith]->(p2:ns0__Person)
+        RETURN p1, p2
+        """
+        df_result = run_query(query)
+
+        if df_result.empty:
+            st.warning("Tidak ada data kolaborasi ditemukan.")
+            return
+
+        net = Network(height="600px", width="100%", bgcolor="#ffffff", font_color="black")
+        net.force_atlas_2based()
+
+        added_nodes = set()
+
+        for _, row in df_result.iterrows():
+            p1 = row["p1"]
+            p2 = row["p2"]
+
+            name1 = p1.get("ns0__hasName", "Unknown 1")
+            id1 = p1.get("ns0__hasSintaID", "id1")
+
+            name2 = p2.get("ns0__hasName", "Unknown 2")
+            id2 = p2.get("ns0__hasSintaID", "id2")
+
+            label1 = f"{name1}\n(SINTA: {id1})"
+            label2 = f"{name2}\n(SINTA: {id2})"
+
+            if id1 not in added_nodes:
+                net.add_node(id1, label=label1, title=label1, color="#3794ff")
+                added_nodes.add(id1)
+
+            if id2 not in added_nodes:
+                net.add_node(id2, label=label2, title=label2, color="#3794ff")
+                added_nodes.add(id2)
+
+            net.add_edge(id1, id2, title="collaborateWith", color="gray")
+
+        net.save_graph("graph_collaboration.html")
+        with open("graph_collaboration.html", "r", encoding="utf-8") as f:
+            html = f.read()
+            components.html(html, height=650, scrolling=True)
+
+    except Exception as e:
+        st.error(f"Gagal menampilkan graf kolaborasi: {e}")
+        
+
+
+def visualize_recommendation_paths(target_name, rekom_names):
+    # Bangun query UNION dari semua rekomendasi
+    print(rekom_names)
+    query_blocks = []
+    for nama_rekom in rekom_names:
+        block = f"""
+  MATCH path = shortestPath(
+    (p1:ns0__Person {{ns0__hasName: '{target_name}'}})-[:collaborateWith*1..10]-
+    (p2:ns0__Person {{ns0__hasName: '{nama_rekom}'}})
+  )
+  RETURN nodes(path) AS nodes, relationships(path) AS rels
+  """
+        query_blocks.append(block)
+
+    full_query = "\nUNION\n".join(query_blocks)
+
+    result = run_query(full_query)
+    
+    if result.empty:
+        fallback_query = f"""
+        MATCH (target:ns0__Person {{ns0__hasName: '{target_name}'}})
+        WITH target
+        MATCH (rekom:ns0__Person)
+        WHERE rekom.ns0__hasName IN {rekom_names}
+        RETURN collect(DISTINCT target) AS target_nodes, collect(DISTINCT rekom) AS rekom_nodes
+        """
+        result = run_query(fallback_query)
+
+        if not result.empty:
+            target_nodes = result.iloc[0]["target_nodes"]  # list of dicts
+            rekom_nodes = result.iloc[0]["rekom_nodes"]    # list of dicts
+
+            nodes = target_nodes + rekom_nodes
+
+            # Buat relasi programatikal: target → setiap rekomendasi
+            rels = []
+            for rekom_node in rekom_nodes:
+                rels.append((target_nodes[0], "recommended", rekom_node))
+
+            # Ganti struktur result menjadi DataFrame dengan kolom 'nodes' dan 'rels'
+            result = pd.DataFrame([{
+                "nodes": nodes,
+                "rels": rels
+            }])
+
+    net = Network(height="650px", bgcolor="#ffffff", font_color="black")
+    net.barnes_hut()
+    added_nodes = set()
+    
+    for idx, row in result.iterrows():
+        nodes = row["nodes"]
+        rels = row["rels"]
+
+        # Tambahkan node
+        for node in nodes:
+            label = node.get("ns0__hasName", "Unknown")
+            node_id = label  # Gunakan nama sebagai ID
+            # 🔷 Tentukan warna berdasarkan jenis node
+            if label == target_name:
+                color = "#1f77b4"  # Biru → target utama
+            elif label in rekom_names:
+                color = "#ff9800"  # Oranye → hasil rekomendasi
+            else:
+                color = "#4caf50"  # Hijau → penghubung biasa
+            
+            if node_id not in added_nodes:
+                net.add_node(node_id, label=label, title=label, color=color)
+                added_nodes.add(node_id)
+                
+        edge_map = defaultdict(set)
+        # Tambahkan edge dari relasi
+        for rel in rels:
+            if isinstance(rel, tuple) and len(rel) == 3:
+                source_node, rel_type, target_node = rel
+                source_label = source_node.get("ns0__hasName", "Unknown")
+                target_label = target_node.get("ns0__hasName", "Unknown")
+                edge_map[(source_label, target_label)].add(rel_type)
+
+        # Tambah relasi tambahan dari rekomendasi
+        for rekom_name in rekom_names:
+            if rekom_name != target_name and rekom_name in added_nodes:
+                edge_map[(target_name, rekom_name)].add("recommended")
+
+        # Tambahkan ke graf
+        for (src, tgt), rel_types in edge_map.items():
+            # Gabungkan label
+            label = ", ".join(rel_types)
+            color = "gray" if "recommended" in rel_types else "black"
+            net.add_edge(src, tgt, label=label, title=label, color=color, width=2 if "recommended" in rel_types else 1)
+              
+    
+    net.save_graph("graph_recommendation_path.html")
+    with open("graph_recommendation_path.html", "r", encoding="utf-8") as f:
+        html = f.read()
+        st.components.v1.html(html, height=600, scrolling=False)
+        
+    st.markdown("""
+    <ul style="list-style: none; padding-left: 0;">
+      <li>
+        <span style="display: inline-block; width: 12px; height: 12px; background-color: #1f77b4; margin-right: 10px;"></span>
+        <strong>Peneliti Target</strong>
+      </li>
+      <li>
+        <span style="display: inline-block; width: 12px; height: 12px; background-color: #ff7f0e; margin-right: 10px;"></span>
+        <strong>Peneliti Rekomendasi</strong>
+      </li>
+      <li>
+        <span style="display: inline-block; width: 12px; height: 12px; background-color: #2ca02c; margin-right: 10px;"></span>
+        <strong>Peneliti Penghubung (bukan rekomendasi)</strong>
+      </li>
+    </ul>
+
+    <ul style="list-style: none; padding-left: 0;">
+      <li>
+        <span style="display: inline-block; width: 12px; height: 2px; background-color: black; margin-right: 10px;"></span>
+        <strong>Relasi collaborateWith (pernah berkolaborasi)</strong>
+      </li>
+      <li>
+        <span style="display: inline-block; width: 12px; height: 2px; background-color: gray; margin-right: 10px;"></span>
+        <strong>Relasi recommended (direkomendasikan)</strong>
+      </li>
+    </ul>
+    <hr>
+    """, unsafe_allow_html=True)
+    
