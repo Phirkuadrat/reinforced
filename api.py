@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional
 from fastapi.middleware.cors import CORSMiddleware
 from ane import recommender, df_all_recommendation_base, run_query
 import uvicorn
@@ -228,6 +230,213 @@ def get_recommendation(name: str, use_cascading: bool = True):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
+# ---------------------------------------------------------
+# API untuk Menyimpan Penilaian (Evaluasi) dari Frontend
+# ---------------------------------------------------------
+class EvaluationItem(BaseModel):
+    nama_rekomendasi: str
+    nilai: int
+
+class EvaluationRequest(BaseModel):
+    target_name: str
+    evaluations: List[EvaluationItem]
+    komentar: Optional[str] = ""
+
+
+# ---------------------------------------------------------
+# ENDPOINT BARU UNTUK LARAVEL (Dosen, Evaluasi, Departemen, Jaringan)
+# ---------------------------------------------------------
+
+@app.get("/api/dosen/detail")
+def get_dosen_detail(sinta_id: str):
+    query = f"""
+    MATCH (p:ns0__Person {{ns0__hasSintaID: '{sinta_id}'}})
+    RETURN
+        p.ns0__hasSintaID        AS hasSintaID,
+        p.ns0__hasName           AS hasName,
+        p.ns0__hasDepartment     AS hasDepartment,
+        toInteger(p.ns0__hasAcademicAge)              AS hasAcademicAge,
+        toInteger(p.ns0__hasCollaborator)             AS hasCollaborator,
+        toFloat(p.ns0__hasAverageCitationScholar)     AS hasAverageCitationScholar,
+        toFloat(p.ns0__hasAverageCitationScopus)      AS hasAverageCitationScopus,
+        toFloat(p.ns0__hasAverageCitationWos)         AS hasAverageCitationWos,
+        toInteger(p.ns0__hasHIndexScholar)            AS hasHIndexScholar,
+        toInteger(p.ns0__hasHIndexScopus)             AS hasHIndexScopus,
+        toInteger(p.ns0__hasHIndexWos)                AS hasHIndexWos,
+        toInteger(p.ns0__hasPublicationScholar)       AS hasPublicationScholar,
+        toInteger(p.ns0__hasPublicationScopus)        AS hasPublicationScopus,
+        toInteger(p.ns0__hasPublicationWos)           AS hasPublicationWos
+    """
+    try:
+        df = run_query(query)
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"Dosen dengan SINTA ID {sinta_id} tidak ditemukan.")
+        row = df.iloc[0].where(df.iloc[0].notna(), other=None).to_dict()
+        return {"status": "success", "data": row}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/evaluasi")
+def get_evaluasi(use_cascading: bool = True):
+    if df_all_recommendation_base is None:
+        raise HTTPException(status_code=500, detail="Model rekomendasi belum siap atau gagal dimuat.")
+    try:
+        from ane import evaluation
+        result = evaluation(use_cascading=use_cascading)
+        result["metode"] = "Cascading Hybrid" if use_cascading else "Standard ANE"
+        return {"status": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/departemen")
+def get_departemen():
+    query = """
+    MATCH (p:ns0__Person)
+    WHERE p.ns0__hasDepartment IS NOT NULL
+    RETURN DISTINCT p.ns0__hasDepartment AS departemen
+    ORDER BY departemen
+    """
+    try:
+        df = run_query(query)
+        if df.empty:
+            return {"status": "success", "data": []}
+        return {"status": "success", "data": df["departemen"].tolist()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/jaringan/full")
+def get_full_graph(departemen: Optional[str] = None):
+    if departemen and departemen.strip():
+        filter_clause = f"WHERE p1.ns0__hasDepartment = '{departemen}' AND p2.ns0__hasDepartment = '{departemen}'"
+    else:
+        filter_clause = ""
+    query = f"""
+    MATCH (p1:ns0__Person)-[:collaborateWith]->(p2:ns0__Person)
+    {filter_clause}
+    RETURN
+        p1.ns0__hasSintaID    AS from_sinta_id,
+        p1.ns0__hasName       AS from_name,
+        p1.ns0__hasDepartment AS from_dept,
+        p2.ns0__hasSintaID    AS to_sinta_id,
+        p2.ns0__hasName       AS to_name,
+        p2.ns0__hasDepartment AS to_dept
+    """
+    try:
+        df = run_query(query)
+        nodes_dict = {}
+        edges = []
+        for _, row in df.iterrows():
+            for sid_key, name_key, dept_key in [
+                ("from_sinta_id", "from_name", "from_dept"),
+                ("to_sinta_id", "to_name", "to_dept")
+            ]:
+                sid = str(row[sid_key])
+                if sid not in nodes_dict:
+                    nodes_dict[sid] = {
+                        "id": sid,
+                        "label": row[name_key],
+                        "group": "connector",
+                        "department": row[dept_key]
+                    }
+            edges.append({
+                "from": str(row["from_sinta_id"]),
+                "to": str(row["to_sinta_id"]),
+                "label": "collaborateWith"
+            })
+        return {
+            "status": "success",
+            "data": {
+                "nodes": list(nodes_dict.values()),
+                "edges": edges
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+import sqlite3
+import os
+
+DB_PATH = os.path.join("database", "evaluasi.db")
+
+@app.on_event("startup")
+def startup_db():
+    os.makedirs("database", exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS penilaian_user (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_name TEXT NOT NULL,
+            rekom_name TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            komentar TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+@app.post("/api/penilaian")
+def submit_penilaian(request: EvaluationRequest):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        komentar = request.komentar.strip() if request.komentar else ""
+        target_name = request.target_name.strip()
+        
+        for eval_item in request.evaluations:
+            cursor.execute(
+                "INSERT INTO penilaian_user (target_name, rekom_name, score, komentar) VALUES (?, ?, ?, ?)",
+                (target_name, eval_item.nama_rekomendasi.strip(), eval_item.nilai, komentar)
+            )
+            
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": "Penilaian berhasil disimpan ke database."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/rekap-penilaian")
+def get_rekap_penilaian():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT target_name FROM penilaian_user ORDER BY created_at DESC")
+        targets = cursor.fetchall()
+        result = []
+        for t in targets:
+            target_name = t["target_name"]
+            cursor.execute("""
+                SELECT rekom_name, score, komentar
+                FROM penilaian_user
+                WHERE target_name = ?
+                ORDER BY id ASC
+            """, (target_name,))
+            rows = cursor.fetchall()
+            if not rows:
+                continue
+            rekomendasi = [
+                {"nama": r["rekom_name"], "score": r["score"], "komentar": r["komentar"] or ""}
+                for r in rows
+            ]
+            rata = round(sum(r["score"] for r in rows) / len(rows), 1)
+            result.append({
+                "target_name": target_name.upper(),
+                "rata_rata": rata,
+                "rekomendasi": rekomendasi
+            })
+        conn.close()
+        return {"status": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

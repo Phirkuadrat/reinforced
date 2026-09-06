@@ -435,39 +435,46 @@ elif st.session_state.page == "hasil_evaluasi":
     
     st.divider()
     
-    folder_path = "penilaian"
-    csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
-
+    import sqlite3
+    import os
+    
+    db_path = os.path.join("database", "evaluasi.db")
     data_rows = []
-
-    for file in csv_files:
+    
+    if os.path.exists(db_path):
         try:
-            df = pd.read_csv(file)
-
-            # Ekstrak nama peneliti target dari nama file
-            nama_file = os.path.basename(file)
-            nama_pemberi = nama_file.replace("penilaian_", "").split("_")[0]
-
-            # Ambil hanya nilai-nilainya (pastikan urutan tetap)
-            nilai_list = df["Nilai"].tolist()[:5]  # pastikan hanya 5 rekomendasi
-
-            # Simpan sebagai dict
-            row = {"Peneliti Target": nama_pemberi.strip().upper()}
-            for i, nilai in enumerate(nilai_list):
-                row[f"R{i+1}"] = nilai
-            row["Rata-rata"] = round(sum(nilai_list) / len(nilai_list), 1)
-
-            # Ambil komentar dari baris pertama (jika kolom 'Komentar' ada)
-            if "Komentar" in df.columns:
-                komentar = df.loc[0, "Komentar"]
-                row["Komentar"] = komentar
-            else:
-                row["Komentar"] = "-"
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
             
-            data_rows.append(row)
-
+            cursor.execute("SELECT DISTINCT target_name FROM penilaian_user ORDER BY created_at DESC")
+            targets = cursor.fetchall()
+            
+            for t in targets:
+                target_name = t["target_name"]
+                cursor.execute("SELECT rekom_name, score, komentar FROM penilaian_user WHERE target_name = ? ORDER BY id ASC LIMIT 5", (target_name,))
+                scores = cursor.fetchall()
+                
+                if not scores:
+                    continue
+                    
+                row = {"Peneliti Target": target_name.upper()}
+                total_score = 0
+                komentar = "-"
+                
+                for i, score_row in enumerate(scores):
+                    row[f"R{i+1}"] = score_row["score"]
+                    total_score += score_row["score"]
+                    if i == 0 and score_row["komentar"]:
+                        komentar = score_row["komentar"]
+                
+                row["Rata-rata"] = round(total_score / len(scores), 1) if len(scores) > 0 else 0
+                row["Komentar"] = komentar
+                data_rows.append(row)
+                
+            conn.close()
         except Exception as e:
-            st.error(f"❌ Gagal membaca {file}: {e}")
+            st.error(f"⚠️ Gagal membaca database: {e}")
 
     # Tampilkan jika ada data
     if data_rows:
