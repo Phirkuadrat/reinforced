@@ -246,7 +246,8 @@ class EvaluationItem(BaseModel):
 class EvaluationRequest(BaseModel):
     target_name: str
     evaluations: List[EvaluationItem]
-    komentar: Optional[str] = ""
+    komentar: Optional[str] = None
+    metode: Optional[str] = "Cascading Hybrid"
 
 
 # ---------------------------------------------------------
@@ -380,6 +381,7 @@ def startup_db():
             rekom_name TEXT NOT NULL,
             score INTEGER NOT NULL,
             komentar TEXT,
+            metode TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -394,16 +396,26 @@ def submit_penilaian(request: EvaluationRequest):
         
         komentar = request.komentar.strip() if request.komentar else ""
         target_name = request.target_name.strip()
-        # Cek apakah target_name ini sudah dinilai
-        cursor.execute("SELECT COUNT(*) FROM penilaian_user WHERE target_name = ?", (target_name,))
-        if cursor.fetchone()[0] > 0:
-            conn.close()
-            raise HTTPException(status_code=400, detail="Penilaian untuk peneliti ini sudah pernah dilakukan.")
         
+        # Cek apakah target_name, rekom_name, dan metode ini spesifik sudah dinilai
+        for eval_item in request.evaluations:
+            rekom_name = eval_item.nama_rekomendasi.strip()
+            cursor.execute(
+                "SELECT COUNT(*) FROM penilaian_user WHERE target_name = ? AND rekom_name = ? AND metode = ?", 
+                (target_name, rekom_name, request.metode)
+            )
+            if cursor.fetchone()[0] > 0:
+                conn.close()
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Rekomendasi '{rekom_name}' menggunakan metode '{request.metode}' sudah pernah dinilai."
+                )
+        
+        # Jika lolos cek, masukkan ke database
         for eval_item in request.evaluations:
             cursor.execute(
-                "INSERT INTO penilaian_user (target_name, rekom_name, score, komentar) VALUES (?, ?, ?, ?)",
-                (target_name, eval_item.nama_rekomendasi.strip(), eval_item.nilai, komentar)
+                "INSERT INTO penilaian_user (target_name, rekom_name, score, komentar, metode) VALUES (?, ?, ?, ?, ?)",
+                (target_name, eval_item.nama_rekomendasi.strip(), eval_item.nilai, komentar, request.metode)
             )
             
         conn.commit()
@@ -426,7 +438,7 @@ def get_rekap_penilaian():
         for t in targets:
             target_name = t["target_name"]
             cursor.execute("""
-                SELECT rekom_name, score, komentar
+                SELECT rekom_name, score, komentar, metode
                 FROM penilaian_user
                 WHERE target_name = ?
                 ORDER BY id ASC
@@ -435,7 +447,12 @@ def get_rekap_penilaian():
             if not rows:
                 continue
             rekomendasi = [
-                {"nama": r["rekom_name"], "score": r["score"], "komentar": r["komentar"] or ""}
+                {
+                    "nama": r["rekom_name"], 
+                    "score": r["score"], 
+                    "komentar": r["komentar"] or "",
+                    "metode": r["metode"] or "Cascading Hybrid"
+                }
                 for r in rows
             ]
             rata = round(sum(r["score"] for r in rows) / len(rows), 1)
