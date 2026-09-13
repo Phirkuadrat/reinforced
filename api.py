@@ -21,23 +21,27 @@ app.add_middleware(
 # API untuk mengambil daftar seluruh dosen (beserta SINTA ID)
 @app.get("/api/dosen")
 def get_dosen_list():
-    if df_all_recommendation_base is None:
-        raise HTTPException(status_code=500, detail="Model rekomendasi belum siap atau gagal dimuat.")
-    
-    peneliti_raw = df_all_recommendation_base["Peneliti"].unique()
-    
-    dosen_list = []
-    import re
-    for p in peneliti_raw:
-        match = re.search(r"^(.*?)\s+\(SINTA:\s*(\d+)\)", p)
-        if match:
+    query = """
+    MATCH (p:ns0__Person)
+    WHERE p.ns0__hasName IS NOT NULL AND p.ns0__hasSintaID IS NOT NULL
+    RETURN 
+        p.ns0__hasName AS nama,
+        p.ns0__hasSintaID AS sinta_id,
+        p.ns0__hasDepartment AS departemen
+    ORDER BY nama ASC
+    """
+    try:
+        df = run_query(query)
+        dosen_list = []
+        for _, row in df.iterrows():
             dosen_list.append({
-                "nama": match.group(1).strip(),
-                "sinta_id": match.group(2).strip()
+                "nama": row["nama"],
+                "sinta_id": row["sinta_id"],
+                "departemen": row["departemen"] if pd.notnull(row["departemen"]) else ""
             })
-            
-    dosen_list.sort(key=lambda x: x["nama"])
-    return {"status": "success", "data": dosen_list}
+        return {"status": "success", "data": dosen_list}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
 
 # API untuk mengambil daftar publikasi dari satu dosen berdasarkan SINTA ID
 @app.get("/api/publikasi")
@@ -390,6 +394,11 @@ def submit_penilaian(request: EvaluationRequest):
         
         komentar = request.komentar.strip() if request.komentar else ""
         target_name = request.target_name.strip()
+        # Cek apakah target_name ini sudah dinilai
+        cursor.execute("SELECT COUNT(*) FROM penilaian_user WHERE target_name = ?", (target_name,))
+        if cursor.fetchone()[0] > 0:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Penilaian untuk peneliti ini sudah pernah dilakukan.")
         
         for eval_item in request.evaluations:
             cursor.execute(
@@ -400,6 +409,8 @@ def submit_penilaian(request: EvaluationRequest):
         conn.commit()
         conn.close()
         return {"status": "success", "message": "Penilaian berhasil disimpan ke database."}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -435,6 +446,42 @@ def get_rekap_penilaian():
             })
         conn.close()
         return {"status": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------
+# API statistik ringkas untuk dashboard
+# ---------------------------------------------------------
+@app.get("/api/stats")
+def get_stats():
+    try:
+        # Total publikasi (jumlah semua publikasi Scholar dari semua dosen)
+        q_pub = """
+        MATCH (p:ns0__Person)
+        RETURN sum(toInteger(p.ns0__hasPublicationScholar)) AS totalPublikasi
+        """
+        # Total relasi kolaborasi unik
+        q_rel = """
+        MATCH ()-[:collaborateWith]->()
+        RETURN count(*) AS totalRelasi
+        """
+        # Total departemen
+        q_dept = """
+        MATCH (p:ns0__Person)
+        RETURN count(DISTINCT p.ns0__hasDepartment) AS totalDepartemen
+        """
+        df_pub = run_query(q_pub)
+        df_rel = run_query(q_rel)
+        df_dept = run_query(q_dept)
+        return {
+            "status": "success",
+            "data": {
+                "totalPublikasi": int(df_pub["totalPublikasi"].iloc[0] or 0),
+                "totalRelasi":    int(df_rel["totalRelasi"].iloc[0] or 0),
+                "totalDepartemen": int(df_dept["totalDepartemen"].iloc[0] or 0),
+            }
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
