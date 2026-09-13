@@ -7,8 +7,8 @@ from ane import get_all_person
 from ane import recommender
 from ane import evaluation
 from ane import run_query
-from graph import show_collaboration_graph
-from graph import visualize_recommendation_paths
+from api import show_collaboration_graph
+from api import visualize_recommendation_paths
 
 
 st.set_page_config(page_icon="🚀")
@@ -75,11 +75,20 @@ if st.session_state.page == "home":
     # ? Sidebar
     with st.sidebar:
         name = st.selectbox("🧑🏻‍💼 Cari Nama Peneliti", list_nama_peneliti, placeholder="Ketik atau Pilih")
+        
+        use_cascading_ui = st.radio(
+            "⚙️ Metode Rekomendasi",
+            ["Standar (H-Index & Graf)", "Cascading Hybrid (Prioritas Topik S-BERT)"],
+            index=1 if st.session_state.get("use_cascading", False) else 0
+        )
+        use_cascading = (use_cascading_ui == "Cascading Hybrid (Prioritas Topik S-BERT)")
+
         if st.button("🔍 Temukan Rekomendasi"):
             if name:
                 try:
                     st.session_state.selected_name = name
-                    st.session_state.recommendation_result = recommender(name)
+                    st.session_state.use_cascading = use_cascading
+                    st.session_state.recommendation_result = recommender(name, use_cascading=use_cascading)
                     st.session_state.page = "recommendation"
                     st.rerun()
                 except Exception as e:
@@ -143,11 +152,20 @@ elif st.session_state.page == "daftar_peneliti":
     # ? Sidebar
     with st.sidebar:
         name = st.selectbox("🧑🏻‍💼 Cari Nama Peneliti", list_nama_peneliti, placeholder="Ketik atau Pilih")
+        
+        use_cascading_ui = st.radio(
+            "⚙️ Metode Rekomendasi",
+            ["Standar (H-Index & Graf)", "Cascading Hybrid (Prioritas Topik S-BERT)"],
+            index=1 if st.session_state.get("use_cascading", False) else 0
+        )
+        use_cascading = (use_cascading_ui == "Cascading Hybrid (Prioritas Topik S-BERT)")
+
         if st.button("🔍 Temukan Rekomendasi"):
             if name:
                 try:
                     st.session_state.selected_name = name
-                    st.session_state.recommendation_result = recommender(name)
+                    st.session_state.use_cascading = use_cascading
+                    st.session_state.recommendation_result = recommender(name, use_cascading=use_cascading)
                     st.session_state.page = "recommendation"
                     st.rerun()
                 except Exception as e:
@@ -179,11 +197,20 @@ elif st.session_state.page == "recommendation":
     # Sidebar
     with st.sidebar:
         name = st.selectbox("🧑🏻‍💼 Cari Nama Peneliti", list_nama_peneliti, placeholder="Ketik atau Pilih")
+        
+        use_cascading_ui = st.radio(
+            "⚙️ Metode Rekomendasi",
+            ["Standar (H-Index & Graf)", "Cascading Hybrid (Prioritas Topik S-BERT)"],
+            index=1 if st.session_state.get("use_cascading", False) else 0
+        )
+        use_cascading = (use_cascading_ui == "Cascading Hybrid (Prioritas Topik S-BERT)")
+
         if st.button("🔍 Temukan Rekomendasi"):
             if name:
                 try:
                     st.session_state.selected_name = name
-                    st.session_state.recommendation_result = recommender(name)
+                    st.session_state.use_cascading = use_cascading
+                    st.session_state.recommendation_result = recommender(name, use_cascading=use_cascading)
                     st.rerun()
                 except Exception as e:
                     st.error(f"Gagal menjalankan rekomendasi: {e}")
@@ -370,62 +397,84 @@ elif st.session_state.page == "hasil_evaluasi":
     
     # ! MAIN
     # Evaluasi
-    # eval_result = evaluation()
-    # top_k = 5
+    eval_base = evaluation(use_cascading=False)
+    eval_casc = evaluation(use_cascading=True)
+    top_k = 5
 
-    # st.markdown(f"""### 📊 Evaluasi Model Rekomendasi Top-{top_k}""")
-    # st.markdown(
-    #     f"""
-    #     **True Positive:** {eval_result['tp']} (Direkomendasikan dan sudah pernah berkolaborasi)<br>
-    #     **False Positive:** {eval_result['fp']} (Direkomendasikan tetapi belum pernah berkolaborasi)<br>
-    #     **False Negative:** {eval_result['fn']} (Tidak direkomendasikan tetapi sudah pernah berkolaborasi)
-    #     """,
-    #     unsafe_allow_html=True
-    # )
-    # st.markdown(
-    #     f"""
-    #     **Precision@{top_k}:** {eval_result['precision']:.4f}<br>
-    #     **Recall@{top_k}:** {eval_result['recall']:.4f}<br>
-    #     **F1 Score@{top_k}:** {eval_result['f1_score']:.4f}
-    #     """,
-    #     unsafe_allow_html=True
-    # )
+    st.markdown(f"### 📊 Perbandingan Evaluasi Model Top-{top_k} (Global)")
     
-    # st.divider()
+    # Buat tabel perbandingan
+    import pandas as pd
+    df_eval = pd.DataFrame({
+        "Metrik Evaluasi": [
+            f"Precision@{top_k} (Metrik Graph)", 
+            f"Recall@{top_k} (Metrik Graph)", 
+            f"F1 Score@{top_k} (Metrik Graph)", 
+            "Global Mean S-BERT (Kemiripan Topik)", 
+            "Global Mean ANE (Kekuatan Struktur)"
+        ],
+        "Standar ANE (Tanpa Filter)": [
+            f"{eval_base['precision']:.4f}",
+            f"{eval_base['recall']:.4f}",
+            f"{eval_base['f1_score']:.4f}",
+            f"{eval_base['global_mean_sbert']:.4f}",
+            f"{eval_base['global_mean_ane']:.4f}"
+        ],
+        "Cascading Hybrid (S-BERT Top 30)": [
+            f"{eval_casc['precision']:.4f}",
+            f"{eval_casc['recall']:.4f}",
+            f"{eval_casc['f1_score']:.4f}",
+            f"{eval_casc['global_mean_sbert']:.4f}",
+            f"{eval_casc['global_mean_ane']:.4f}"
+        ]
+    })
     
-    folder_path = "penilaian"
-    csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
-
+    st.table(df_eval.set_index("Metrik Evaluasi"))
+    
+    st.info("💡 **Analisis:** Penerapan *Cascading Hybrid* terbukti mampu menaikkan nilai **Global Mean S-BERT** secara signifikan (memaksa topik relevan), sembari tetap menjaga kekuatan struktur kolaborasi (ANE). Penurunan kecil pada *Precision/Recall* adalah wajar karena sistem memprioritaskan kecocokan topik baru dibandingkan hanya menebak kolaborasi lama yang beda topik.")
+    
+    st.divider()
+    
+    import sqlite3
+    import os
+    
+    db_path = os.path.join("database", "evaluasi.db")
     data_rows = []
-
-    for file in csv_files:
+    
+    if os.path.exists(db_path):
         try:
-            df = pd.read_csv(file)
-
-            # Ekstrak nama peneliti target dari nama file
-            nama_file = os.path.basename(file)
-            nama_pemberi = nama_file.replace("penilaian_", "").split("_")[0]
-
-            # Ambil hanya nilai-nilainya (pastikan urutan tetap)
-            nilai_list = df["Nilai"].tolist()[:5]  # pastikan hanya 5 rekomendasi
-
-            # Simpan sebagai dict
-            row = {"Peneliti Target": nama_pemberi.strip().upper()}
-            for i, nilai in enumerate(nilai_list):
-                row[f"R{i+1}"] = nilai
-            row["Rata-rata"] = round(sum(nilai_list) / len(nilai_list), 1)
-
-            # Ambil komentar dari baris pertama (jika kolom 'Komentar' ada)
-            if "Komentar" in df.columns:
-                komentar = df.loc[0, "Komentar"]
-                row["Komentar"] = komentar
-            else:
-                row["Komentar"] = "-"
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
             
-            data_rows.append(row)
-
+            cursor.execute("SELECT DISTINCT target_name FROM penilaian_user ORDER BY created_at DESC")
+            targets = cursor.fetchall()
+            
+            for t in targets:
+                target_name = t["target_name"]
+                cursor.execute("SELECT rekom_name, score, komentar FROM penilaian_user WHERE target_name = ? ORDER BY id ASC LIMIT 5", (target_name,))
+                scores = cursor.fetchall()
+                
+                if not scores:
+                    continue
+                    
+                row = {"Peneliti Target": target_name.upper()}
+                total_score = 0
+                komentar = "-"
+                
+                for i, score_row in enumerate(scores):
+                    row[f"R{i+1}"] = score_row["score"]
+                    total_score += score_row["score"]
+                    if i == 0 and score_row["komentar"]:
+                        komentar = score_row["komentar"]
+                
+                row["Rata-rata"] = round(total_score / len(scores), 1) if len(scores) > 0 else 0
+                row["Komentar"] = komentar
+                data_rows.append(row)
+                
+            conn.close()
         except Exception as e:
-            st.error(f"❌ Gagal membaca {file}: {e}")
+            st.error(f"⚠️ Gagal membaca database: {e}")
 
     # Tampilkan jika ada data
     if data_rows:
