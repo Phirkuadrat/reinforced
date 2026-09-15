@@ -164,7 +164,10 @@ def get_recommendation(name: str, use_cascading: bool = True):
                         nodes_dict[t_id] = {
                             "id": t_id,
                             "label": t_node.get("ns0__hasName", target_name_graph),
-                            "group": "target"
+                            "group": "target",
+                            "h_index": int(t_node.get("ns0__hasHIndexScholar", 0)) if t_node.get("ns0__hasHIndexScholar") else 0,
+                            "publication_count": int(t_node.get("ns0__hasPublicationScholar", 0)) if t_node.get("ns0__hasPublicationScholar") else 0,
+                            "department": str(t_node.get("ns0__hasDepartment", "")) if t_node.get("ns0__hasDepartment") else ""
                         }
                         
                     for r_node in rekom_nodes:
@@ -173,7 +176,10 @@ def get_recommendation(name: str, use_cascading: bool = True):
                         nodes_dict[r_id] = {
                             "id": r_id,
                             "label": r_name,
-                            "group": "recommendation"
+                            "group": "recommendation",
+                            "h_index": int(r_node.get("ns0__hasHIndexScholar", 0)) if r_node.get("ns0__hasHIndexScholar") else 0,
+                            "publication_count": int(r_node.get("ns0__hasPublicationScholar", 0)) if r_node.get("ns0__hasPublicationScholar") else 0,
+                            "department": str(r_node.get("ns0__hasDepartment", "")) if r_node.get("ns0__hasDepartment") else ""
                         }
                         if t_id:
                             edges_list.append({
@@ -201,7 +207,10 @@ def get_recommendation(name: str, use_cascading: bool = True):
                                 nodes_dict[node_id] = {
                                     "id": node_id,
                                     "label": n_name,
-                                    "group": group
+                                    "group": group,
+                                    "h_index": int(node.get("ns0__hasHIndexScholar", 0)) if node.get("ns0__hasHIndexScholar") else 0,
+                                    "publication_count": int(node.get("ns0__hasPublicationScholar", 0)) if node.get("ns0__hasPublicationScholar") else 0,
+                                    "department": str(node.get("ns0__hasDepartment", "")) if node.get("ns0__hasDepartment") else ""
                                 }
                                 
                     if isinstance(path_rels, list):
@@ -326,18 +335,22 @@ def get_full_graph(departemen: Optional[str] = None):
         p1.ns0__hasSintaID    AS from_sinta_id,
         p1.ns0__hasName       AS from_name,
         p1.ns0__hasDepartment AS from_dept,
+        toInteger(p1.ns0__hasHIndexScholar) AS from_h_index,
+        toInteger(p1.ns0__hasPublicationScholar) AS from_pub,
         p2.ns0__hasSintaID    AS to_sinta_id,
         p2.ns0__hasName       AS to_name,
-        p2.ns0__hasDepartment AS to_dept
+        p2.ns0__hasDepartment AS to_dept,
+        toInteger(p2.ns0__hasHIndexScholar) AS to_h_index,
+        toInteger(p2.ns0__hasPublicationScholar) AS to_pub
     """
     try:
         df = run_query(query)
         nodes_dict = {}
         edges = []
         for _, row in df.iterrows():
-            for sid_key, name_key, dept_key in [
-                ("from_sinta_id", "from_name", "from_dept"),
-                ("to_sinta_id", "to_name", "to_dept")
+            for sid_key, name_key, dept_key, hindex_key, pub_key in [
+                ("from_sinta_id", "from_name", "from_dept", "from_h_index", "from_pub"),
+                ("to_sinta_id", "to_name", "to_dept", "to_h_index", "to_pub")
             ]:
                 sid = str(row[sid_key])
                 if sid not in nodes_dict:
@@ -345,7 +358,9 @@ def get_full_graph(departemen: Optional[str] = None):
                         "id": sid,
                         "label": row[name_key],
                         "group": "connector",
-                        "department": row[dept_key]
+                        "department": row[dept_key] if pd.notnull(row[dept_key]) else "",
+                        "h_index": int(row[hindex_key]) if pd.notnull(row[hindex_key]) else 0,
+                        "publication_count": int(row[pub_key]) if pd.notnull(row[pub_key]) else 0
                     }
             edges.append({
                 "from": str(row["from_sinta_id"]),
