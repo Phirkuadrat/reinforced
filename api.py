@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 from typing import List, Optional
 from fastapi.middleware.cors import CORSMiddleware
@@ -442,13 +442,26 @@ def submit_penilaian(request: EvaluationRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/rekap-penilaian")
-def get_rekap_penilaian():
+def get_rekap_penilaian(response: Response):
+    # Cegah caching pada browser/frontend agar data selalu fresh (Real-time)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT target_name FROM penilaian_user ORDER BY created_at DESC")
+        
+        # Ambil target_name diurutkan dari waktu submit TERBARU
+        cursor.execute("""
+            SELECT target_name, MAX(created_at) as last_eval 
+            FROM penilaian_user 
+            GROUP BY target_name 
+            ORDER BY last_eval DESC
+        """)
         targets = cursor.fetchall()
+        
         result = []
         for t in targets:
             target_name = t["target_name"]
@@ -459,8 +472,10 @@ def get_rekap_penilaian():
                 ORDER BY id ASC
             """, (target_name,))
             rows = cursor.fetchall()
+            
             if not rows:
                 continue
+                
             rekomendasi = [
                 {
                     "nama": r["rekom_name"], 
@@ -471,11 +486,13 @@ def get_rekap_penilaian():
                 for r in rows
             ]
             rata = round(sum(r["score"] for r in rows) / len(rows), 1)
+            
             result.append({
                 "target_name": target_name.upper(),
                 "rata_rata": rata,
                 "rekomendasi": rekomendasi
             })
+            
         conn.close()
         return {"status": "success", "data": result}
     except Exception as e:
