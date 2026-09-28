@@ -243,6 +243,105 @@ def get_recommendation(name: str, use_cascading: bool = True):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ENDPOINT REKOMENDASI FINAL 
+@app.get("/api/rekomendasi-final")
+def get_recommendation_final(name: str, alpha: float = 0.5):
+    try:
+        # Ambil rekomendasi dari model Cascading Hybrid (selalu pakai cascading)
+        df_result = recommender(name, use_cascading=True)
+
+        if df_result.empty:
+            return {"status": "success", "data": [], "graph": {"nodes": [], "edges": []}}
+
+        result_list = df_result.to_dict('records')
+
+        # AMBIL PENILAIAN USER DARI SQLITE
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # Normalisasi nama target untuk pencocokan
+        target_name_normalized = name.strip()
+
+        # Ambil semua penilaian untuk target ini
+        cursor.execute("""
+            SELECT rekom_name, AVG(score) as avg_score
+            FROM penilaian_user
+            WHERE LOWER(target_name) = LOWER(?)
+            GROUP BY rekom_name
+        """, (target_name_normalized,))
+        rating_rows = cursor.fetchall()
+        conn.close()
+
+        # Buat dict: nama_rekomendasi → rata-rata rating
+        rating_dict = {row[0].strip().lower(): row[1] for row in rating_rows}
+
+        # HITUNG FINAL SCORE
+        for r in result_list:
+            ane_score = float(r.get("Skor ANE", 0))
+            rekom_nama_key = r.get("Rekomendasi_Nama", "").strip().lower()
+
+            if rekom_nama_key in rating_dict:
+                # Item sudah dinilai
+                avg_rating = rating_dict[rekom_nama_key]
+                normalized_rating = (avg_rating - 1) / 4
+                final_score = alpha * ane_score + (1 - alpha) * normalized_rating
+                r["Rating_User"] = round(avg_rating, 2)
+                r["Rating_Normalized"] = round(normalized_rating, 4)
+                r["Is_Rated"] = True
+            else:
+                # Item belum dinilai
+                final_score = ane_score
+                r["Rating_User"] = None
+                r["Rating_Normalized"] = None
+                r["Is_Rated"] = False
+
+            r["Final_Score"] = round(final_score, 6)
+
+        # Sort berdasarkan Final Score 
+        result_list.sort(key=lambda x: x["Final_Score"], reverse=True)
+
+        # AMBIL DETAIL STATISTIK DAN PUBLIKASI DARI NEO4J
+        target_sinta = result_list[0]['SINTA_ID'] if len(result_list) > 0 else None
+        rekom_sinta_list = [str(r['Rekomendasi_SINTA_ID']) for r in result_list]
+        all_sinta = rekom_sinta_list + ([str(target_sinta)] if target_sinta else [])
+
+        sinta_in_query = "[" + ", ".join([f"'{s}'" for s in set(all_sinta)]) + "]"
+
+        query = f"""
+        MATCH (p:ns0__Person)
+        WHERE p.ns0__hasSintaID IN {sinta_in_query}
+        OPTIONAL MATCH (p)-[:ns0__hasPublication]->(pub:ns0__Publication)
+        RETURN
+            p.ns0__hasSintaID AS sinta_id,
+            p AS properties,
+            collect(pub.ns0__hasTitle) AS publications
+        """
+        df_detail = run_query(query)
+
+        detail_dict = {}
+        for _, row in df_detail.iterrows():
+            sid = str(row['sinta_id'])
+            props = dict(row['properties']) if isinstance(row['properties'], dict) else {}
+            pubs = list(row['publications']) if isinstance(row['publications'], list) else []
+            pubs = [p for p in pubs if p]
+            detail_dict[sid] = {"statistik": props, "publikasi": pubs}
+
+        for r in result_list:
+            rsid = str(r['Rekomendasi_SINTA_ID'])
+            if rsid in detail_dict:
+                r['Detail_Statistik'] = detail_dict[rsid]['statistik']
+                r['Detail_Publikasi'] = detail_dict[rsid]['publikasi']
+
+        return {
+            "status": "success",
+            "alpha": alpha,
+            "total_rated": len(rating_dict),
+            "data": result_list,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ---------------------------------------------------------
