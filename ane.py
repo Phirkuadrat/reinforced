@@ -75,7 +75,7 @@ def ane():
     walk_length = parameter_random_walk
     non_local_limit = parameter_random_walk
 
-    set_top_k_rekomendasi = 5
+    set_top_k_rekomendasi = 10
     cascade_filter_k = 30
     set_hidden_dim = 64
     set_embedding_dim = 40
