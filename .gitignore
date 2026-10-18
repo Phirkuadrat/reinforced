@@ -23,3 +23,5 @@ testing/
 # Misc
 *.log
 .env
+*.db
+database/*.db

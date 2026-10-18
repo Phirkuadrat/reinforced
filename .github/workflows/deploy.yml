@@ -1,0 +1,48 @@
+name: Deploy FastAPI to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to VPS via SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          echo "🔑 Setting up SSH connection..."
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_vps
+          chmod 600 ~/.ssh/id_vps
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+          echo "🚀 Connecting and running deploy script..."
+          ssh -i ~/.ssh/id_vps -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" bash -s << 'EOF'
+            set -e
+            echo "📁 Entering project directory..."
+            cd /var/www/reinforced
+
+            echo "📥 Fetching latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "📦 Updating python packages..."
+            source venv/bin/activate
+            pip install --no-cache-dir -r requirements.txt
+            deactivate
+
+            echo "🔒 Setting permissions..."
+            chown -R www-data:www-data /var/www/reinforced
+            chmod 775 /var/www/reinforced/database
+
+            echo "🔄 Restarting FastAPI service..."
+            systemctl restart reinforced
+
+            echo "✅ Deployment FastAPI selesai dengan sukses!"
+          EOF
