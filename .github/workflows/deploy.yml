@@ -17,7 +17,6 @@ jobs:
           SSH_KEY: ${{ secrets.SSH_KEY }}
         run: |
           echo "🔍 Preparing SSH connection..."
-          # Bersihkan SSH_HOST dari http://, https://, spasi, atau garis miring
           CLEAN_HOST=$(echo "$SSH_HOST" | sed -e 's|^[a-zA-Z]*://||' -e 's|/.*||' | tr -d ' \r\n')
           CLEAN_USER=$(echo "$SSH_USER" | tr -d ' \r\n')
 
@@ -36,6 +35,9 @@ jobs:
 
             echo "📁 Entering project directory..."
             cd /var/www/reinforced
+
+            # Hindari error dubious ownership dari git
+            git config --global --add safe.directory /var/www/reinforced
 
             echo "📥 Fetching latest code..."
             git fetch origin main
