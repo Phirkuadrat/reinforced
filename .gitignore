@@ -24,4 +24,4 @@ testing/
 *.log
 .env
 *.db
-database/*.db
+database/*.db
