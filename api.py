@@ -481,11 +481,13 @@ def get_full_graph(departemen: Optional[str] = None):
 import sqlite3
 import os
 
-DB_PATH = os.path.join("database", "evaluasi.db")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.path.join(BASE_DIR, "database")
+DB_PATH = os.path.join(DB_DIR, "evaluasi.db")
 
 @app.on_event("startup")
 def startup_db():
-    os.makedirs("database", exist_ok=True)
+    os.makedirs(DB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -505,6 +507,7 @@ def startup_db():
 @app.post("/api/penilaian")
 def submit_penilaian(request: EvaluationRequest):
     try:
+        os.makedirs(DB_DIR, exist_ok=True)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         

@@ -49,8 +49,11 @@ jobs:
             deactivate
 
             echo "🔒 Setting permissions..."
+            mkdir -p /var/www/reinforced/database
+            touch /var/www/reinforced/database/evaluasi.db
             chown -R www-data:www-data /var/www/reinforced
-            chmod 775 /var/www/reinforced/database
+            chmod -R 775 /var/www/reinforced/database
+            chmod 664 /var/www/reinforced/database/evaluasi.db
 
             echo "🔄 Restarting FastAPI service..."
             systemctl restart reinforced
